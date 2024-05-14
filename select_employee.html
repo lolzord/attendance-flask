@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Select Employee for RFID Registration</title>
+</head>
+<body>
+    <h1>Select an Employee to Register RFID Card</h1>
+    <ul>
+        {% for employee in employees %}
+            <li>
+                {{ employee.name }}
+                <!-- Form to submit RFID card ID for the specific employee -->
+                <form action="/capture_card/{{ employee.id }}" method="post">
+                    <input type="text" name="card_id" placeholder="Enter RFID Card ID" required>
+                    <button type="submit">Register Card</button>
+                </form>
+            </li>
+        {% endfor %}
+    </ul>
+</body>
+</html>
