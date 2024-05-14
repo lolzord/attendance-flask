@@ -17,12 +17,13 @@ login_manager.init_app(app)
 login_manager.login_view = 'login'
 
 # Database Configuration
-app.config['MYSQL_HOST'] = 'rfidattendance-server.mysql.database.azure.com'
+app.config['MYSQL_HOST'] = 'rfidattendance-server.database.windows.net'
 app.config['MYSQL_PORT'] = 3306
 app.config['MYSQL_USER'] = 'rfidattendanceadmin@rfidattendance-server'
 app.config['MYSQL_PASSWORD'] = 'your_password'
 app.config['MYSQL_DB'] = 'RFIDAttendanceDB'
 app.config['MYSQL_CURSORCLASS'] = 'DictCursor'
+
 
 app.secret_key = 'XAbxaKXbLpB2ZwnLw8-ABA'
 mysql = MySQL(app)
