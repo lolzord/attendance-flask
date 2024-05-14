@@ -132,5 +132,16 @@ def dashboard():
 
     return render_template('dashboard.html', attendance_records=attendance_records, employees=employees, timetable=timetable, show_tabs=show_tabs)
 
+@app.route('/test_db_connection')
+def test_db_connection():
+    try:
+        cursor = mysql.connection.cursor()
+        cursor.execute("SELECT DATABASE()")
+        db_name = cursor.fetchone()
+        cursor.close()
+        return f"Connected to database: {db_name['DATABASE()']}"
+    except Exception as e:
+        return f"Failed to connect to database: {e}"
+
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0')
