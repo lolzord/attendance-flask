@@ -1,43 +1,37 @@
+import os
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, UserMixin, login_required, logout_user, current_user
 from werkzeug.security import check_password_hash
 from datetime import datetime
-from flask_mysqldb import MySQL
-from flask_login import LoginManager, logout_user, login_required, UserMixin
-import MySQLdb.cursors
 import pytz
-
-malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
-malaysia_time = datetime.now(malaysia_tz)
-
-selected_email = None
 
 app = Flask(__name__)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# Database Configuration
-app.config['MYSQL_HOST'] = 'rfidattendance-server.database.windows.net'
-app.config['MYSQL_PORT'] = 3306
-app.config['MYSQL_USER'] = 'rfidattendanceadmin@rfidattendance-server'
-app.config['MYSQL_PASSWORD'] = 'your_password'
-app.config['MYSQL_DB'] = 'RFIDAttendanceDB'
-app.config['MYSQL_CURSORCLASS'] = 'DictCursor'
+# Set the connection string to SQLALCHEMY_DATABASE_URI from environment variables
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+db = SQLAlchemy(app)
 
 app.secret_key = 'XAbxaKXbLpB2ZwnLw8-ABA'
-mysql = MySQL(app)
 
 @login_manager.user_loader
 def load_user(user_id):
-    cursor = mysql.connection.cursor(MySQLdb.cursors.DictCursor)
-    cursor.execute("SELECT * FROM employees WHERE id = %s", [user_id])
-    user = cursor.fetchone()
-    cursor.close()
-    if user:
-        return User(id=user['id'], email=user['email'], password=user['password'])
-    else:
-        return None
+    return User.query.get(int(user_id))
+
+class User(UserMixin, db.Model):
+    __tablename__ = 'employees'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100))
+    email = db.Column(db.String(100), unique=True)
+    password = db.Column(db.String(255))
+    card_id = db.Column(db.String(255))
+    token = db.Column(db.String(255))
+    is_admin = db.Column(db.Boolean, default=False)
 
 @app.route('/')
 def index():
@@ -48,12 +42,6 @@ def logout():
     logout_user()
     return redirect(url_for('login'))
 
-class User(UserMixin):
-    def __init__(self, id, email, password):
-        self.id = id
-        self.email = email
-        self.password = password
-
 @app.route('/capture_card')
 def capture_card():
     global selected_email
@@ -62,11 +50,13 @@ def capture_card():
         return jsonify({'error': 'No card ID or email provided'}), 400
 
     try:
-        cursor = mysql.connection.cursor()
-        cursor.execute("UPDATE employees SET card_id = %s WHERE email = %s", (card_id, selected_email))
-        mysql.connection.commit()
-        cursor.close()
-        return redirect('/dashboard')
+        user = User.query.filter_by(email=selected_email).first()
+        if user:
+            user.card_id = card_id
+            db.session.commit()
+            return redirect('/dashboard')
+        else:
+            return jsonify({'error': 'User not found'}), 404
     except Exception as e:
         return jsonify({'error': 'Database update failed', 'message': str(e)}), 500
 
@@ -77,18 +67,18 @@ def select_user():
         card_id = request.form.get('card_id')
 
         try:
-            cursor = mysql.connection.cursor()
-            cursor.execute("UPDATE employees SET card_id = %s WHERE email = %s", (card_id, email))
-            mysql.connection.commit()
-            cursor.close()
-            return redirect(url_for('dashboard'))
+            user = User.query.filter_by(email=email).first()
+            if user:
+                user.card_id = card_id
+                db.session.commit()
+                return redirect(url_for('dashboard'))
+            else:
+                return jsonify({'error': 'User not found'}), 404
         except Exception as e:
             return jsonify({'error': 'Database update failed', 'message': str(e)}), 500
     else:
-        cursor = mysql.connection.cursor()
-        cursor.execute("SELECT email FROM employees")
-        emails = [item['email'] for item in cursor.fetchall()]
-        cursor.close()
+        users = User.query.with_entities(User.email).all()
+        emails = [user.email for user in users]
         return render_template('select_user.html', emails=emails)
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -97,13 +87,11 @@ def login():
         email = request.form.get('email')
         password = request.form.get('password')
 
-        cursor = mysql.connection.cursor(MySQLdb.cursors.DictCursor)
-        cursor.execute("SELECT * FROM employees WHERE email = %s", [email])
-        user = cursor.fetchone()
+        user = User.query.filter_by(email=email).first()
 
-        if user and check_password_hash(user['password'], password):
+        if user and check_password_hash(user.password, password):
             session['logged_in'] = True
-            session['is_admin'] = user['is_admin']
+            session['is_admin'] = user.is_admin
             session['email'] = email
             return redirect(url_for('dashboard'))
         else:
@@ -114,33 +102,42 @@ def login():
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    cursor = mysql.connection.cursor()
-
     if session.get('is_admin'):
-        cursor.execute("SELECT employees.name, attendance.in_time, attendance.out_time, attendance.working_hours, attendance.subject FROM employees JOIN attendance ON employees.id = attendance.employee_id")
+        attendance_records = db.session.query(
+            User.name, Attendance.in_time, Attendance.out_time, Attendance.working_hours, Attendance.subject
+        ).join(Attendance, User.id == Attendance.employee_id).all()
     else:
-        cursor.execute("SELECT employees.name, attendance.in_time, attendance.out_time, attendance.working_hours, attendance.subject FROM employees JOIN attendance ON employees.id = attendance.employee_id WHERE employees.email = %s", [session['email']])
+        attendance_records = db.session.query(
+            User.name, Attendance.in_time, Attendance.out_time, Attendance.working_hours, Attendance.subject
+        ).join(Attendance, User.id == Attendance.employee_id).filter(User.email == session['email']).all()
 
-    attendance_records = cursor.fetchall()
-    cursor.execute("SELECT employees.name, employees.email, employees.card_id FROM employees")
-    employees = cursor.fetchall()
-    cursor.execute("SELECT start_time, end_time, subject FROM timetable ORDER BY start_time")
-    timetable = [{"start_time": str(row['start_time']), "end_time": str(row['end_time']), "subject": row['subject']} for row in cursor.fetchall()]
+    employees = User.query.with_entities(User.name, User.email, User.card_id).all()
+    timetable = Timetable.query.with_entities(Timetable.start_time, Timetable.end_time, Timetable.subject).order_by(Timetable.start_time).all()
+    
+    return render_template('dashboard.html', attendance_records=attendance_records, employees=employees, timetable=timetable, show_tabs=session.get('is_admin', False))
 
-    cursor.close()
+class Attendance(db.Model):
+    __tablename__ = 'attendance'
+    id = db.Column(db.Integer, primary_key=True)
+    employee_id = db.Column(db.Integer, db.ForeignKey('employees.id'))
+    in_time = db.Column(db.DateTime)
+    out_time = db.Column(db.DateTime)
+    working_hours = db.Column(db.Float)
+    subject = db.Column(db.String(255))
 
-    show_tabs = session.get('is_admin', False)
-
-    return render_template('dashboard.html', attendance_records=attendance_records, employees=employees, timetable=timetable, show_tabs=show_tabs)
+class Timetable(db.Model):
+    __tablename__ = 'timetable'
+    id = db.Column(db.Integer, primary_key=True)
+    start_time = db.Column(db.Time)
+    end_time = db.Column(db.Time)
+    subject = db.Column(db.String(255))
 
 @app.route('/test_db_connection')
 def test_db_connection():
     try:
-        cursor = mysql.connection.cursor()
-        cursor.execute("SELECT DATABASE()")
-        db_name = cursor.fetchone()
-        cursor.close()
-        return f"Connected to database: {db_name['DATABASE()']}"
+        result = db.engine.execute("SELECT DB_NAME() AS [Current Database]")
+        db_name = result.fetchone()[0]
+        return f"Connected to database: {db_name}"
     except Exception as e:
         return f"Failed to connect to database: {e}"
 
